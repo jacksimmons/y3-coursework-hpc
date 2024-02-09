@@ -92,8 +92,9 @@ int main(){
   // Shared: x -> Each thread accesses a different index, so
   // there is no chance for race conditions. We require the full
   // array with all values entered, so shared is necessary.
-  // Private: dx -> No need for threads to share this.
-  #pragma omp parallel for default(none) shared(x) private(dx)
+  //
+  // dx -> Threads require the initialised value of dx.
+  #pragma omp parallel for default(none) shared(x, dx)
   for (int i=0; i<NX+2; i++){
     x[i] = ( (float) i - 0.5) * dx;
   }
@@ -102,7 +103,7 @@ int main(){
   /* LOOP 2 */
   
   // Shared and private: Same reasons for Loop 1.
-  #pragma omp parallel for default(none) shared(y) private(dy)
+  #pragma omp parallel for default(none) shared(y, dy)
   for (int j=0; j<NY+2; j++){
     y[j] = ( (float) j - 0.5) * dy;
   }
@@ -110,10 +111,15 @@ int main(){
   /*** Set up Gaussian initial conditions ***/
   /* LOOP 3 */
 
-  // Shared: x, y -> Threads need to share this as part of the calculation.
+  // Shared: x, y -> Threads need to read from these, initialised outside this loop.
+  // 
+  // u -> Output must take writes from all threads, so must be shared.
+  // Each thread has different indices, so no race conditions.
+  // 
   // Private: x2, y2 -> Threads are reading/writing to these simultaneously,
-  // so private access is necessary to avoid race conditions.
-  #pragma omp parallel for default(none) shared(x, y) private(x2, y2) collapse(2)
+  // so private access is necessary to avoid race conditions. Also the init'd
+  // value for both is not required.
+  #pragma omp parallel for default(none) shared(x, y, u) private(x2, y2) collapse(2)
   for (int i=0; i<NX+2; i++){
     for (int j=0; j<NY+2; j++){
       x2      = (x[i]-x0) * (x[i]-x0);
@@ -168,9 +174,9 @@ int main(){
     /* Loop over points in the domain but not boundary values */
     /* LOOP 8 */
 
-    // Shared: dudt -> Same reason as Loop 6
-    // Private: dx, dy, u -> No need for threads to share these.
-    #pragma omp parallel for default(none) shared(dudt) private(dx, dy, u)
+    // Shared: dudt -> Same reasons as for Loop 6
+    // dx, dy, u -> Value set outside of loop, so must be shared.
+    #pragma omp parallel for default(none) shared(dudt, dx, dy, u)
     for (int i=1; i<NX+1; i++){
       for (int j=1; j<NY+1; j++){
 	dudt[i][j] = -velx * (u[i][j] - u[i-1][j]) / dx
@@ -183,7 +189,7 @@ int main(){
     /* LOOP 9 */
 
     // Shared and private: Same reasons as Loop 8
-    #pragma omp parallel for default(none) shared(u) private(dt)
+    #pragma omp parallel for default(none) shared(u, dudt, dt)
     for	(int i=1; i<NX+1; i++){
       for (int j=1; j<NY+1; j++){
 	u[i][j] = u[i][j] + dudt[i][j] * dt;
