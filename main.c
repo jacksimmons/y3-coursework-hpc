@@ -26,7 +26,7 @@ Notes: The time step is calculated using the CFL condition
 /*********************************************************************
                       Main function
 **********************************************************************/
-#define TASK 3
+#define TASK 4
 
 int main(){
   // Distance unit: m
@@ -83,9 +83,9 @@ int main(){
   const float velx=1.0;  // Velocity in x direction
   const float vely=0.0;  // Velocity in y direction
 #elif TASK >= 3
-  float velx[NX+2];      // Horizontal velocity profile
+  float velx[NY+2];
   const float vely=0.0;
-#endif  
+#endif
 
   /* (2.3) Shear parameters */
 #if TASK >= 3
@@ -107,13 +107,13 @@ int main(){
   /* Calculate distance between points */
   float dx = (xmax-xmin) / ( (float) NX);
   float dy = (ymax-ymin) / ( (float) NY);
-  
+ 
   /* Calculate time step using the CFL condition */
   /* The fabs function gives the absolute value in case the velocity is -ve */
-#if TASK < 3  
+#if TASK < 3
   float dt = CFL / ( (fabs(velx) / dx) + (fabs(vely) / dy) );
 #else
-  float dt[NX+2];
+  float dt = INFINITY;
 #endif
 
   /**Report information about the calculation ***/
@@ -121,7 +121,6 @@ int main(){
   printf("Grid spacing dy     = %g\n", dy);
   printf("CFL number          = %g\n", CFL);
   printf("No. of time steps   = %d\n", nsteps);
-
 #if TASK < 3
   printf("Time step           = %g\n", dt);
   printf("End time            = %g\n", dt*(float) nsteps);
@@ -137,7 +136,7 @@ int main(){
   // array with all values entered, so shared is necessary.
   //
   // dx -> Threads require the initialised value of dx.
-  #pragma omp parallel for default(none) shared(x, dx)
+  #pragma omp parallel for shared(x, dx)
   for (int i=0; i<NX+2; i++){
     x[i] = ( (float) i - 0.5) * dx;
   }
@@ -145,29 +144,30 @@ int main(){
   /*** Place y points in the middle of the cell ***/
   /* LOOP 2 */
   
+  // Setup velocity array (if Task 3)
   // Same reasons for Loop 1.
-  #pragma omp parallel for default(none) shared(y, dy)
+#if TASK < 3
+  #pragma omp parallel for shared(y, dy)
   for (int j=0; j<NY+2; j++){
     y[j] = ( (float) j - 0.5) * dy;
   }
-
-
-  // Logiarithmic Profile Loop (Loop 2a)
-#if TASK >= 3
-  #pragma omp parallel for default(none) shared(y, velx, dt, dx, dy)
-  for (int yi = 0; yi < NY + 2; yi++)
-  {
-     if (y[yi] > Z0)
-     {
-	velx[yi] = (U_STAR / K) * log(y[yi] / Z0);
-     }
-     else
-     {
-	velx[yi] = 0;
-     }
-     dt[yi] = CFL / ( (fabs(velx[yi]) / dx) + (fabs(vely) / dy) );
+#else
+  #pragma omp parallel for shared(y, dy, velx, dt)
+  for (int j=0; j<NY+2; j++){
+	y[j] = ( (float) j - 0.5) * dy;
+	if (y[j] > Z0)
+		velx[j] = U_STAR * log(y[j] / Z0) / K;
+	else
+		velx[j] = 0;
+	float thisTimeStep = CFL / ( (fabs(velx[j]) / dx) + (fabs(vely) / dy) );
+	
+	// Pick the MINIMUM value of dt.
+	if (thisTimeStep < dt) dt = thisTimeStep;
   }
+  printf("Time step           = %g\n", dt);
+  printf("End time            = %g\n", dt*(float) nsteps);
 #endif
+  
 
   /*** Set up Gaussian initial conditions ***/
   /* LOOP 3 */
@@ -180,7 +180,7 @@ int main(){
   // Private: x2, y2 -> Threads are reading/writing to these simultaneously,
   // so private access is necessary to avoid race conditions. Also the init'd
   // value for both is not required.
-  #pragma omp parallel for default(none) shared(u) private(x2, y2) shared(x, y) collapse(2)
+  #pragma omp parallel for shared(u) private(x2, y2) shared(x, y) collapse(2)
   for (int i=0; i<NX+2; i++){
     for (int j=0; j<NY+2; j++){
       x2      = (x[i]-x0) * (x[i]-x0);
@@ -227,7 +227,7 @@ int main(){
     /* LOOP 6 */
 
     // Shared: u -> Threads must share this to fill the array.
-    #pragma omp parallel for default(none) shared(u)
+    #pragma omp parallel for shared(u)
     for (int j=0; j<NY+2; j++){
       u[0][j]    = bval_left;
       u[NX+1][j] = bval_right;
@@ -237,7 +237,7 @@ int main(){
     /* LOOP 7 */
 
     // Same reasons as for Loop 6
-    #pragma omp parallel for default(none) shared(u)
+    #pragma omp parallel for shared(u)
     for (int i=0; i<NX+2; i++){
       u[i][0]    = bval_lower;
       u[i][NY+1] = bval_upper;
@@ -249,24 +249,26 @@ int main(){
   
     // Shared: dudt -> Filled array req'd in Loop 9, each thread writes to a different index.
     // dx, dy, u -> These are only read from.
+	// dt -> This is shared.
 #if TASK < 3
-    #pragma omp parallel for default(none) collapse(2) shared(u, dudt, dx, dy)
+    #pragma omp parallel for collapse(2) shared(u, dudt, dx, dy)
     for (int i=1; i<NX+1; i++){
       for (int j=1; j<NY+1; j++){
          dudt[i][j] = -velx * (u[i][j] - u[i-1][j]) / dx
-	            - vely * (u[i][j] - u[i][j-1]) / dy;
+	                  -vely * (u[i][j] - u[i][j-1]) / dy;
+		 
        }
     }
 #else
     // velx -> Only read from.
-    #pragma omp parallel for default(none) collapse(2) shared(u, dudt, dx, dy, velx)
+    #pragma omp parallel for collapse(2) shared(u, dudt, dx, dy, velx)
     for (int i=1; i<NX+1; i++)
     {
-	for(int j=1; j<NY+1; j++)
-	{
-	    dudt[i][j] = -velx[j] * (u[i][j] - u[i-1][j]) / dx;
-		         -vely * (u[i][j] - u[i][j-1]) / dy;
-	}
+	  for(int j=1; j<NY+1; j++)
+	  {
+	    dudt[i][j] = -velx[j] * (u[i][j] - u[i-1][j]) / dx
+					 -vely * (u[i][j] - u[i][j-1]) / dy;
+	  }
     }
 #endif
     
@@ -276,22 +278,27 @@ int main(){
     
     // Shared: u -> Filled array req'd in next iter, each thread writes to different index.
     // dudt, dt -> Only read from.
-#if TASK < 3
-    #pragma omp parallel for default(none) collapse(2) shared(u, dudt, dt)
+// #if TASK < 3
+    #pragma omp parallel for collapse(2) shared(u, dudt, dt)
     for	(int i=1; i<NX+1; i++){
       for (int j=1; j<NY+1; j++){
         u[i][j] = u[i][j] + dudt[i][j] * dt;
       }
     }
-#else
-    // dx, dy, dt -> Only read from.
-    #pragma omp parallel for default(none) collapse(2) shared(u, dudt, dx, dy, dt)
-    for (int i=1; i<NX+1; i++){
-      for (int j=1; j<NY+1; j++){
-        u[i][j] = u[i][j] + dudt[i][j] * dt[j];
-      }
-    }
-#endif
+// #else
+	// #pragma omp parallel for collapse(2) shared(u, dudt)
+    // for	(int i=1; i<nx+1; i++){
+      // for (int j=1; j<ny+1; j++){
+		// float chosen_velx = 0.0f;
+		// if (y[j] > z0)
+			// chosen_velx = u_star * log(y[j] / z0) / k;
+		  
+		// if (y[j] > z0)
+			// chosen_dt = cfl / ( (fabs(chosen_velx) / dx) + (fabs(vely) / dy) );
+        // u[i][j] = u[i][j] + dudt[i][j] * chosen_dt;
+      // }
+    // }
+// #endif
   } // time loop
  
  
@@ -308,6 +315,21 @@ int main(){
     }
   }
   fclose(finalfile);
+  
+  // Vertically averaged plot (excluding BCs)
+  // A plot of x against vertical average
+#if TASK == 4
+  FILE *vAvgPlotFile;
+  vAvgPlotFile = fopen("vavgplot.dat", "w");
+  for (int i=1; i<NX+1; i++){
+	float sum = 0;
+	for (int j=1; j<NY+1; j++){
+	  sum += u[i][j];
+	}
+	fprintf(vAvgPlotFile, "%g %g\n", x[i], sum/NY);
+  }
+  fclose(vAvgPlotFile);
+#endif
 
   return 0;
 }

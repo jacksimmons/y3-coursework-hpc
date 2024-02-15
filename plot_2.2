@@ -1,13 +1,8 @@
 # This gnuplot script plots the results from the first coursework assignment. 
 # It is assumed that the data to be plotted are in a file called
 # final.dat which contains 3 columns: x,y,u
-# The plot is sent to a PNG file called {filename}_final.png 
-# To use this file copy it to the directory/folder containing 
-# final.dat and run the command: 
-# gnuplot -e "filename='file'" {this file name}
+# gnuplot plot_2.2
  
-if (!exists("filename")) filename='default'
-
 # Send output to a PNG file
 set terminal png  enhanced 
 
@@ -24,10 +19,10 @@ set size square
 set cbrange [0:1]
 
 # Plot initial and final images
-set output filename."_initial.png"
+set output "initial.png"
 plot "initial.dat" with image
 
-set output filename."_final.png"
+set output "final.png"
 plot "final.dat" with image 
 
 

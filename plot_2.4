@@ -1,0 +1,23 @@
+# gnuplot plot_2.4
+ 
+# Send output to a PNG file
+set terminal png  enhanced 
+
+# Set ranges and labels for axes
+set xrange [0:30.0]
+set yrange [0:1]
+set xlabel "x"
+
+# Make "vavg" subscript
+set ylabel "u_v_a_v_g(x)"
+
+set style line 1 \
+    linecolor rgb '#0060ad' \
+    linetype 1 linewidth 2 \
+    pointtype 7 pointsize 0.1
+
+set output "vavgplot.png"
+plot "vavgplot.dat" with linespoints linestyle 1
+
+
+# End of file
