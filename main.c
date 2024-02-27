@@ -26,7 +26,7 @@ Notes: The time step is calculated using the CFL condition
 /*********************************************************************
                       Main function
 **********************************************************************/
-#define TASK 1
+#define TASK 4
 
 int main(){
   // Distance unit: m
