@@ -26,11 +26,12 @@ Notes: The time step is calculated using the CFL condition
 /*********************************************************************
                       Main function
 **********************************************************************/
-#define TASK 4
+#define TASK 1
 
 int main(){
   // Distance unit: m
   // Time unit: s
+
 
   /* Grid properties */
   const int NX=1000;    // Number of x points
@@ -45,7 +46,8 @@ int main(){
   const float xmax=30.0;
   const float ymax=30.0; 
 #endif
-  
+
+
   /* Parameters for the Gaussian initial conditions */
 #if TASK == 1
   const float x0=0.1; // Centre (x)
@@ -61,12 +63,14 @@ int main(){
   const float sigmax2 = sigmax * sigmax; // Width(x) squared
   const float sigmay2 = sigmay * sigmay; // Width(y) squared
 
+
   /* Boundary conditions */
   const float bval_left=0.0;    // Left boundary value
   const float bval_right=0.0;   // Right boundary value
   const float bval_lower=0.0;   // Lower boundary
   const float bval_upper=0.0;   // Upper boundary
-  
+
+
   /* Time stepping parameters */
   const float CFL=0.9;   // CFL number 
 #if TASK == 1
@@ -74,6 +78,7 @@ int main(){
 #else
   const int nsteps=800;
 #endif
+
 
   /* Velocity */
 #if TASK == 1
@@ -87,12 +92,6 @@ int main(){
   const float vely=0.0;
 #endif
 
-  /* (2.3) Shear parameters */
-#if TASK >= 3
-  const float U_STAR = 0.2f;    // Friction velocity
-  const float Z0 = 1.0f;        // Roughness length
-  const float K = 0.41f;        // Von Kármán's constant
-#endif
 
   /* Arrays to store variables. These have NX+2 elements
      to allow boundary values to be stored at both ends */
@@ -103,17 +102,27 @@ int main(){
 
   float x2;   // x squared (used to calculate iniital conditions)
   float y2;   // y squared (used to calculate iniital conditions)
-  
+
+
   /* Calculate distance between points */
   float dx = (xmax-xmin) / ( (float) NX);
   float dy = (ymax-ymin) / ( (float) NY);
- 
+
+
   /* Calculate time step using the CFL condition */
   /* The fabs function gives the absolute value in case the velocity is -ve */
 #if TASK < 3
   float dt = CFL / ( (fabs(velx) / dx) + (fabs(vely) / dy) );
 #else
   float dt = INFINITY;
+#endif
+
+
+  /* Shear parameters */
+#if TASK >= 3
+  const float U_STAR = 0.2f;    // Friction velocity
+  const float Z0 = 1.0f;        // Roughness length
+  const float K = 0.41f;        // Von Kármán's constant
 #endif
 
   /**Report information about the calculation ***/
@@ -128,6 +137,7 @@ int main(){
   printf("Distance advected y = %g\n", vely*dt*(float) nsteps);
 #endif
 
+
   /*** Place x points in the middle of the cell ***/
   /* LOOP 1 */
 
@@ -141,9 +151,9 @@ int main(){
     x[i] = ( (float) i - 0.5) * dx;
   }
 
+
   /*** Place y points in the middle of the cell ***/
   /* LOOP 2 */
-  
   // Setup velocity array (if Task 3)
   // Same reasons for Loop 1.
 #if TASK < 3
@@ -151,18 +161,19 @@ int main(){
   for (int j=0; j<NY+2; j++){
     y[j] = ( (float) j - 0.5) * dy;
   }
+  // velx -> Each thread writes to a different index, so shared
+  // is sufficient.
+  // dt -> The loop should output the smallest calculated timestep,
+  // so reduction with the min function is necessary.
 #else
-  #pragma omp parallel for shared(y, dy, velx, dt)
+  #pragma omp parallel for shared(y, dy, velx) reduction(min:dt)
   for (int j=0; j<NY+2; j++){
-	y[j] = ( (float) j - 0.5) * dy;
-	if (y[j] > Z0)
-		velx[j] = U_STAR * log(y[j] / Z0) / K;
-	else
-		velx[j] = 0;
-	float thisTimeStep = CFL / ( (fabs(velx[j]) / dx) + (fabs(vely) / dy) );
-	
-	// Pick the MINIMUM value of dt.
-	if (thisTimeStep < dt) dt = thisTimeStep;
+    y[j] = ( (float) j - 0.5) * dy;
+    if (y[j] > Z0)
+      velx[j] = U_STAR * log(y[j] / Z0) / K;
+    else
+      velx[j] = 0;
+    dt = CFL / ( (fabs(velx[j]) / dx) + (fabs(vely) / dy) );
   }
   printf("Time step           = %g\n", dt);
   printf("End time            = %g\n", dt*(float) nsteps);
@@ -171,18 +182,17 @@ int main(){
 
   /*** Set up Gaussian initial conditions ***/
   /* LOOP 3 */
-
-  // 
-  // Shared: u -> Output must take writes from all threads, so must be shared.
-  // Each thread has different indices, so no race conditions.
-  // x, y -> Initialised outside the loop.
-  // 
-  // Private: x2, y2 -> Threads are reading/writing to these simultaneously,
-  // so private access is necessary to avoid race conditions. Also the init'd
-  // value for both is not required.
+  // u -> Output must take writes from all threads, so must be shared.
+  // Each thread writes to a different index, so no race conditions.
+  // x, y -> Only read from, and initialised outside the loop, so shared.
+  // x2, y2 -> Threads are reading/writing to these simultaneously,
+  // so private access is necessary to avoid race conditions. Also their values
+  // are not needed after the loop.
   #pragma omp parallel for shared(u) private(x2, y2) shared(x, y) collapse(2)
-  for (int i=0; i<NX+2; i++){
-    for (int j=0; j<NY+2; j++){
+  for (int i=0; i<NX+2; i++)
+  {
+    for (int j=0; j<NY+2; j++)
+    {
       x2      = (x[i]-x0) * (x[i]-x0);
       y2      = (y[j]-y0) * (y[j]-y0);
       u[i][j] = exp( -1.0 * ( (x2/(2.0*sigmax2)) + (y2/(2.0*sigmay2)) ) );
@@ -193,14 +203,13 @@ int main(){
   FILE *initialfile;
   initialfile = fopen("initial.dat", "w");
   
-  /* LOOP 4 */
 
-  // Cannot be parallelised (without rewriting the inner code).
-  //
-  // The fprintf call appends a line to the file stream, which is
-  // inherently a serial operation.
+  /* LOOP 4 */
+  // Cannot be parallelised.
+  // This loop requires the fprintf calls to be performed in order, so
+  // that the file contains the correct values on each line.
   // If this loop were to be parallelised, the lines would have a non-
-  // deterministic order, leading to incorrect results most of the time.
+  // deterministic order, leading to incorrect graphs.
   for (int i=0; i<NX+2; i++){
     for (int j=0; j<NY+2; j++){
       fprintf(initialfile, "%g %g %g\n", x[i], y[j], u[i][j]);
@@ -210,39 +219,35 @@ int main(){
  
   /*** Update solution by looping over time steps ***/
   /* LOOP 5 */
-
-  // It is not possible to parallelise this loop, due to the way `u` is assigned to.
-  //
-  // The issue is that the value of `u` at the start of every iteration depends on
-  // the value at the end of the previous iteration (see loop 9), because it is a sum.
-  //
-  // Race conditions are also present with the use of `dudt`.
-  //
-  // While it may be possible to parallelise this with a rewrite of the inner loops,
-  // and a `reduction` clause, parallelism cannot be attained just by adding an OpenMP
-  // directive.
-  for (int m=0; m<nsteps; m++){ 
-
+  // Each iteration of the loop modifies, then reads from, EVERY index in u.
+  // Then, the next iteration requires the value of u from the previous
+  // iteration.
+  // Because each iteration requires the value of u from the previous iteration,
+  // this loop must be performed serially, so it cannot be parallelised.
+  for (int m=0; m<nsteps; m++)
+  {
     /*** Apply boundary conditions at u[0][:] and u[NX+1][:] ***/
     /* LOOP 6 */
-
     // Shared: u -> Threads must share this to fill the array.
     #pragma omp parallel for shared(u)
-    for (int j=0; j<NY+2; j++){
+    for (int j=0; j<NY+2; j++)
+    {
       u[0][j]    = bval_left;
       u[NX+1][j] = bval_right;
     }
 
+
     /*** Apply boundary conditions at u[:][0] and u[:][NY+1] ***/
     /* LOOP 7 */
-
-    // Same reasons as for Loop 6
+    // Same reasons as for Loop 6.
     #pragma omp parallel for shared(u)
-    for (int i=0; i<NX+2; i++){
+    for (int i=0; i<NX+2; i++)
+    {
       u[i][0]    = bval_lower;
       u[i][NY+1] = bval_upper;
     }
     
+
     /*** Calculate rate of change of u using leftward difference ***/
     /* Loop over points in the domain but not boundary values */
     /* LOOP 8 (For tasks 1/2)*/
@@ -252,62 +257,49 @@ int main(){
 	// dt -> This is shared.
 #if TASK < 3
     #pragma omp parallel for collapse(2) shared(u, dudt, dx, dy)
-    for (int i=1; i<NX+1; i++){
-      for (int j=1; j<NY+1; j++){
-         dudt[i][j] = -velx * (u[i][j] - u[i-1][j]) / dx
-	                  -vely * (u[i][j] - u[i][j-1]) / dy;
-		 
-       }
+    for (int i=1; i<NX+1; i++)
+    {
+      for (int j=1; j<NY+1; j++)
+      {
+        dudt[i][j] = -velx * (u[i][j] - u[i-1][j]) / dx
+                  -vely * (u[i][j] - u[i][j-1]) / dy;
+      }
     }
 #else
     // velx -> Only read from.
     #pragma omp parallel for collapse(2) shared(u, dudt, dx, dy, velx)
     for (int i=1; i<NX+1; i++)
     {
-	  for(int j=1; j<NY+1; j++)
-	  {
-	    dudt[i][j] = -velx[j] * (u[i][j] - u[i-1][j]) / dx
-					 -vely * (u[i][j] - u[i][j-1]) / dy;
-	  }
+      for(int j=1; j<NY+1; j++)
+      {
+        dudt[i][j] = -velx[j] * (u[i][j] - u[i-1][j]) / dx
+            -vely * (u[i][j] - u[i][j-1]) / dy;
+      }
     }
 #endif
     
+
     /*** Update u from t to t+dt ***/
     /* Loop over points in the domain but not boundary values */
     /* LOOP 9 */
     
     // Shared: u -> Filled array req'd in next iter, each thread writes to different index.
     // dudt, dt -> Only read from.
-// #if TASK < 3
     #pragma omp parallel for collapse(2) shared(u, dudt, dt)
     for	(int i=1; i<NX+1; i++){
       for (int j=1; j<NY+1; j++){
         u[i][j] = u[i][j] + dudt[i][j] * dt;
       }
     }
-// #else
-	// #pragma omp parallel for collapse(2) shared(u, dudt)
-    // for	(int i=1; i<nx+1; i++){
-      // for (int j=1; j<ny+1; j++){
-		// float chosen_velx = 0.0f;
-		// if (y[j] > z0)
-			// chosen_velx = u_star * log(y[j] / z0) / k;
-		  
-		// if (y[j] > z0)
-			// chosen_dt = cfl / ( (fabs(chosen_velx) / dx) + (fabs(vely) / dy) );
-        // u[i][j] = u[i][j] + dudt[i][j] * chosen_dt;
-      // }
-    // }
-// #endif
-  } // time loop
+  }
  
  
   /*** Write array of final u values out to file ***/
   FILE *finalfile;
   finalfile = fopen("final.dat", "w");
   
-  /* LOOP 10 */
 
+  /* LOOP 10 */
   // Cannot be parallelised. (Same reason as Loop 4)
   for (int i=0; i<NX+2; i++){
     for (int j=0; j<NY+2; j++){
@@ -316,17 +308,20 @@ int main(){
   }
   fclose(finalfile);
   
+
   // Vertically averaged plot (excluding BCs)
   // A plot of x against vertical average
 #if TASK == 4
   FILE *vAvgPlotFile;
   vAvgPlotFile = fopen("vavgplot.dat", "w");
-  for (int i=1; i<NX+1; i++){
-	float sum = 0;
-	for (int j=1; j<NY+1; j++){
-	  sum += u[i][j];
-	}
-	fprintf(vAvgPlotFile, "%g %g\n", x[i], sum/NY);
+  for (int i=1; i<NX+1; i++)
+  {
+    float sum = 0;
+    for (int j=1; j<NY+1; j++)
+    {
+      sum += u[i][j];
+    }
+    fprintf(vAvgPlotFile, "%g %g\n", x[i], sum/NY);
   }
   fclose(vAvgPlotFile);
 #endif
