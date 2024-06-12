@@ -1,5 +1,6 @@
 # Requirements
-A version of gcc which supports -fopenmp (comes with the OpenMP library).
+- A version of gcc which supports -fopenmp (comes with the OpenMP library).  
+- gnuplot.  
 
 # Setup
 To run the code of an earlier task (e.g. 2.1, 2.2), change the #define for TASK.
